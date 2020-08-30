@@ -10,6 +10,19 @@ file(GLOB TEST_CODE
 
 include_directories(${PROJECT_SOURCE_DIR}/include)
 
+option(CODE_COVERAGE "Enable coverage reporting" OFF)
+
+add_library(coverage_config INTERFACE)
+if(CODE_COVERAGE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+  # Add required flags (GCC & LLVM/Clang)
+  target_compile_options(coverage_config INTERFACE
+    -O0        # no optimization
+    -g         # generate debug info
+    --coverage # sets all required flags
+  )
+  target_link_libraries(coverage_config INTERFACE --coverage)
+endif()
+
 option(BUILD_TEST "Build the tests" OFF)
 
 if(BUILD_TEST)
@@ -21,6 +34,7 @@ if(BUILD_TEST)
 
   add_executable(run-test ${TEST_CODE})
   target_link_libraries(run-test gtest gmock gtest_main)
+  target_link_libraries(run-test coverage_config)
 
   add_test(NAME run-test COMMAND ./run-test)
 endif()

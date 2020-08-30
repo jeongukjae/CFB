@@ -1,2 +1,3 @@
 # CFB
- Reader and Writer for Compound File Binary Format
+
+A single header C++ library for Compound File Binary(CFB) Format

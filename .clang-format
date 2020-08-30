@@ -3,4 +3,6 @@ BasedOnStyle: chromium
 IndentWidth: 2
 ColumnLimit: 150
 ---
+Language: Cpp
+AlignConsecutiveMacros: true
 ...

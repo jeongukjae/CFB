@@ -208,13 +208,12 @@ class CompoundFile {
 
   std::vector<char> readStreamOfEntry(const DirectoryEntry* entry) const {
     std::vector<char> buffer;
-    readStreamOfEntry(entry, buffer);
+    buffer.resize(entry->streamSize);
+    readStreamOfEntry(entry, buffer.data());
     return buffer;
   }
 
-  void readStreamOfEntry(const DirectoryEntry* entry, std::vector<char>& buffer) const {
-    buffer.resize(entry->streamSize);
-
+  void readStreamOfEntry(const DirectoryEntry* entry, char* buffer) const {
     if (entry->streamSize < compoundFileHeader->miniStreamCutoffSize)
       readStream(entry->startSectorLocation, entry->streamSize, buffer, miniSectorSize,
                  std::bind(&CompoundFile::getAddressWithMiniSectorNumber, this, std::placeholders::_1, std::placeholders::_2),
@@ -381,7 +380,7 @@ class CompoundFile {
 
   void readStream(uint32_t sectorNumber,
                   uint64_t streamSizeToRead,
-                  std::vector<char>& buffer,
+                  char* buffer,
                   uint64_t sectorSize,
                   std::function<const void*(uint32_t, uint32_t)> addressFn,
                   std::function<uint32_t(uint32_t)> nextSectorFn) const {
@@ -390,7 +389,7 @@ class CompoundFile {
     while (streamSizeToRead > 0) {
       const void* sourceAddress = addressFn(sectorNumber, 0);
       auto streamSizeToCopy = std::min(sectorSize, streamSizeToRead);
-      memcpy(buffer.data() + bufferPosition, sourceAddress, std::min(sectorSize, streamSizeToCopy));
+      memcpy(buffer + bufferPosition, sourceAddress, std::min(sectorSize, streamSizeToCopy));
 
       bufferPosition += streamSizeToCopy;
       streamSizeToRead -= streamSizeToCopy;

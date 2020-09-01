@@ -144,3 +144,21 @@ TEST(CFB_property_stream, check_property_stream) {
             "MobileBrowser Active Bugs - Microsoft Team Foundation Server");
   EXPECT_EQ(CFB::internal::convertUTF16ToUTF8(CFB::VT::getCodePageString(propertySet.getPropertyById(1002))), "http://vstfbing:8080/tfs/favicon.ico");
 }
+
+TEST(CFB_property_stream, check_invalid_parameters) {
+  auto bytes = readFile("../tests/data/1.dat");
+
+  CFB::CompoundFile file;
+  file.read(bytes.data(), bytes.size());
+  const CFB::DirectoryEntry* propertyEntry;
+  file.iterateAll([&propertyEntry](const CFB::DirectoryEntry* entry, size_t depth) {
+    if (CFB::isPropertySetStream(entry))
+      propertyEntry = entry;
+  });
+
+  auto streamOfPropertyEntry = file.readStreamOfEntry(propertyEntry);
+  EXPECT_THROW(CFB::PropertySetStream(streamOfPropertyEntry.data(), 1), std::invalid_argument);
+
+  CFB::PropertySetStream propertySetStream(streamOfPropertyEntry.data(), streamOfPropertyEntry.size());
+  EXPECT_THROW(propertySetStream.getPropertySet(3), std::invalid_argument);
+}

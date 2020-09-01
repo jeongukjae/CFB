@@ -117,3 +117,30 @@ TEST(CFB_read, check_stream_content) {
                                         "\x28\x66\xac\x1e\x14\x29\x00\x00\x00\x00\x49\x45\x4e\x44\xae\x42\x60\x82 ",
                                         78));
 }
+
+TEST(CFB_property_stream, check_property_stream) {
+  auto bytes = readFile("../tests/data/1.dat");
+
+  CFB::CompoundFile file;
+  file.read(bytes.data(), bytes.size());
+  const CFB::DirectoryEntry* propertyEntry;
+  file.iterateAll([&propertyEntry](const CFB::DirectoryEntry* entry, size_t depth) {
+    if (CFB::isPropertySetStream(entry)) {
+      propertyEntry = entry;
+    }
+  });
+
+  auto streamOfPropertyEntry = file.readStreamOfEntry(propertyEntry);
+  CFB::PropertySetStream propertySetStream(streamOfPropertyEntry.data(), streamOfPropertyEntry.size());
+
+  EXPECT_EQ(propertySetStream.getNumPropertySets(), 1);
+
+  CFB::PropertySet propertySet = propertySetStream.getPropertySet(0);
+
+  EXPECT_EQ(CFB::internal::convertUTF16ToUTF8(CFB::VT::getCodePageString(propertySet.getPropertyById(3))),
+            "http://vstfbing:8080/tfs/Bing/Bing/"
+            "_workitems#path=Shared+Queries%2FSTC-A%2FMarketEngagement%2FMobile+Browser%2FMobileBrowser+Active+Bugs&_a=query");
+  EXPECT_EQ(CFB::internal::convertUTF16ToUTF8(CFB::VT::getCodePageString(propertySet.getPropertyById(5))),
+            "MobileBrowser Active Bugs - Microsoft Team Foundation Server");
+  EXPECT_EQ(CFB::internal::convertUTF16ToUTF8(CFB::VT::getCodePageString(propertySet.getPropertyById(1002))), "http://vstfbing:8080/tfs/favicon.ico");
+}

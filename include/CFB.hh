@@ -7,6 +7,7 @@
 #include <functional>
 #include <locale>
 #include <string>
+#include <utility>
 #include <vector>
 
 #define CFB_SIGNATURE "\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1"
@@ -75,18 +76,30 @@ struct PropertySetStreamHeader {
   } propertySetInfo[1];
 };
 
+struct PropertyIdentifierAndOffset {
+  uint32_t id;
+  uint32_t offset;
+};
+
 struct PropertySetHeader {
   uint32_t size;
-  uint32_t NumProperties;
-  struct {
-    uint32_t id;
-    uint32_t offset;
-  } propertyIdentifierAndOffset[1];
+  uint32_t numProperties;
+  PropertyIdentifierAndOffset propertyIdentifierAndOffset[1];
+};
+
+struct TypedPropertyValue {
+  uint16_t type;
+  uint16_t padding;
+  char value[1];
 };
 
 #pragma pack(pop)
 
 namespace internal {
+
+inline uint32_t getUint32Field(const void* address) {
+  return *reinterpret_cast<const uint32_t*>(address);
+}
 
 inline std::string convertUTF16ToUTF8(const char16_t* u16Array) {
   std::u16string str(u16Array);
@@ -98,12 +111,43 @@ inline std::string convertUTF16ToUTF8(const char16_t* u16Array) {
 
 }  // namespace internal
 
+namespace VT {
+
+// Can be used for VT_BSTR and VT_LPSTR
+//
+// CodePageString Structure
+//  - 4 byte size
+//  - 16-bit characters (null-terminated)
+inline const char16_t* getCodePageString(const TypedPropertyValue* property) {
+  return reinterpret_cast<const char16_t*>(property->value + 4);
+}
+
+inline std::pair<uint32_t, const char16_t*> getCodePageStringWithSize(const TypedPropertyValue* property) {
+  return std::pair<uint32_t, const char16_t*>(internal::getUint32Field(property->value), getCodePageString(property));
+}
+
+// TODO Add more converting functions.
+
+}  // namespace VT
+
 enum DirectoryEntryType {
   ENTRY_UNKNOWN_OR_UNALLOCATED = 0,
   ENTRY_STORAGE_OBJECT = 1,
   ENTRY_STREAM_OBJECT = 2,
   ENTRY_ROOT_STORAGE_OBJECT = 5,
 };
+
+bool isStreamObject(const DirectoryEntry* directoryEntry) {
+  return directoryEntry->objectType == ENTRY_STREAM_OBJECT;
+}
+bool isStorageObject(const DirectoryEntry* directoryEntry) {
+  return directoryEntry->objectType == ENTRY_STORAGE_OBJECT;
+}
+// https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-oleps/e5484a83-3cc1-43a6-afcf-6558059fe36e
+// check is property set stream
+bool isPropertySetStream(const DirectoryEntry* directoryEntry) {
+  return directoryEntry->name[0] == 0x05;
+}
 
 class CompoundFile {
  public:
@@ -191,12 +235,6 @@ class CompoundFile {
     iterateNodes(getDirectoryEntry(directoryEntry->childID), 0, callback);
   }
 
-  static bool isStreamObject(const DirectoryEntry* directoryEntry) { return directoryEntry->objectType == ENTRY_STREAM_OBJECT; }
-  static bool isStorageObject(const DirectoryEntry* directoryEntry) { return directoryEntry->objectType == ENTRY_STORAGE_OBJECT; }
-  // https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-oleps/e5484a83-3cc1-43a6-afcf-6558059fe36e
-  // check is property set stream
-  static bool isPropertySetStream(const DirectoryEntry* directoryEntry) { return directoryEntry->name[0] == 0x05; }
-
  private:
   const unsigned char* buffer;
   size_t bufferLength;
@@ -239,8 +277,6 @@ class CompoundFile {
 
     return getAddressWithSectorNumber(desiredSector, offset);
   }
-
-  static uint32_t getUint32Field(const void* address) { return *reinterpret_cast<const uint32_t*>(address); }
 
   // Validate Header when reading a file.
   //
@@ -286,7 +322,7 @@ class CompoundFile {
     if (miniFATSectorNumber == CFB_SECTOR_END_OF_CHAIN)
       return CFB_SECTOR_END_OF_CHAIN;
 
-    auto nextMiniSectorNumber = getUint32Field(getAddressWithSectorNumber(miniFATSectorNumber, sectorNumber * 4));
+    auto nextMiniSectorNumber = internal::getUint32Field(getAddressWithSectorNumber(miniFATSectorNumber, sectorNumber * 4));
     return nextMiniSectorNumber;
   }
 
@@ -300,7 +336,7 @@ class CompoundFile {
     uint32_t currentFATSector = sectorNumber / entriesPerSector;
 
     auto currentFATSectorNumber = getFATSectorNumber(currentFATSector);
-    auto nextSectorNumber = getUint32Field(getAddressWithSectorNumber(currentFATSectorNumber, (sectorNumber % entriesPerSector) * 4));
+    auto nextSectorNumber = internal::getUint32Field(getAddressWithSectorNumber(currentFATSectorNumber, (sectorNumber % entriesPerSector) * 4));
     return nextSectorNumber;
   }
 
@@ -322,10 +358,10 @@ class CompoundFile {
     while (sectorNumber >= entriesPerSector) {
       sectorNumber -= entriesPerSector;
       // In DIFAT Sectors, "Next DIFAT Sector Location" field is at the last.
-      difatSectorNumber = getUint32Field(getAddressWithSectorNumber(difatSectorNumber, sectorSize - 4));
+      difatSectorNumber = internal::getUint32Field(getAddressWithSectorNumber(difatSectorNumber, sectorSize - 4));
     }
 
-    return getUint32Field(getAddressWithSectorNumber(difatSectorNumber, sectorNumber * 4));
+    return internal::getUint32Field(getAddressWithSectorNumber(difatSectorNumber, sectorNumber * 4));
   }
 
   template <typename CallbackType>
@@ -361,6 +397,115 @@ class CompoundFile {
       sectorNumber = nextSectorFn(sectorNumber);
     }
   }
+};
+
+enum VT_Variables : uint16_t {
+  VT_EMPTY = 0x0000,             // Undefined, minimum version 0
+  VT_NULL = 0x0001,              // NULL, minimum version 0
+  VT_I2 = 0x0002,                // 16-bit signed int, minimum version 0
+  VT_I4 = 0x0003,                // 32-bit signed int, minimum version 0
+  VT_R4 = 0x0004,                // single precision 4-byte IEEE FP number, minimum version 0
+  VT_R8 = 0x0005,                // double precision 8-byte IEEE FP number, minimum version 0
+  VT_CY = 0x0006,                // CURRENCY, minimum version 0
+  VT_DATE = 0x0007,              // DATE, minimum version 0
+  VT_BSTR = 0x0008,              // CodePagestring, minimum version 0
+  VT_ERROR = 0x000A,             // HRESULT, minimum version 0
+  VT_BOOL = 0x000B,              // VARIANT_BOOL, minimum version 0
+  VT_DECIMAL = 0x000E,           // DECIMAL, minimum version 0
+  VT_I1 = 0x0010,                // 1-byte signed int, minimum version 1
+  VT_UI1 = 0x0011,               // 1-byte unsigned int, minimum version 0
+  VT_UI2 = 0x0012,               // 2-byte unsigned int, minimum version 0
+  VT_UI4 = 0x0013,               // 4-byte unsigned int, minimum version 0
+  VT_I8 = 0x0014,                // 8-byte signed int, minimum version 0
+  VT_UI8 = 0x0015,               // 8-byte unsigned int, minimum version 0
+  VT_INT = 0x0016,               // 4-byte signed int, minimum version 1
+  VT_UINT = 0x0017,              // 4-byte unsigned int, minimum version 1
+  VT_LPSTR = 0x001E,             // CodePagestring, minimum version 0
+  VT_LPWSTR = 0x001F,            // UnicodeString, minimum version 0
+  VT_FILETIME = 0x0040,          // FILETIME, minimum version 0
+  VT_BLOB = 0x0041,              // Binary Large Object(BLOB), minimum version 0
+  VT_STREAM = 0x0042,            // Stream, minimum version 0
+  VT_STORAGE = 0x0043,           // Storage, minimum version 0
+  VT_STREAMED_OBJECT = 0x0044,   // Stream representing an object in an application specific manner, minimum version 0
+  VT_STORED_OBJECT = 0x0045,     // Storage representing an object in an application specific manner, minimum version 0
+  VT_BLOB_OBJECT = 0x0046,       // BLOB representing an object in an application-specific manner, minimum version 0
+  VT_CF = 0x0047,                // PropertyIdentifier, minimum version 0
+  VT_CLSID = 0x0048,             // CLSID, minimum version 0
+  VT_VERSIONED_STREAM = 0x0049,  // STREAM with application-specific version GUID(VersionedString), minimum version 0
+  VT_VECTOR = 0x1000,            // Vector, minimum version 0
+  VT_ARRAY = 0x2000,             // Array, minimum version 1
+};
+
+// TODO Support Dictionary Property
+class PropertySet {
+ public:
+  PropertySet(const void* buffer)
+      : buffer(reinterpret_cast<const char*>(buffer)), propertySetHeader(reinterpret_cast<const PropertySetHeader*>(buffer)) {}
+
+  uint32_t getPropertySetSize() const { return propertySetHeader->size; }
+
+  uint32_t getNumProperties() const { return propertySetHeader->numProperties; }
+
+  const PropertyIdentifierAndOffset* getPropertyIdentifierAndOffset(size_t index) const {
+    if (index >= getNumProperties())
+      throw std::invalid_argument("index >= NumProperties");
+
+    return &(propertySetHeader->propertyIdentifierAndOffset[index]);
+  }
+  const PropertyIdentifierAndOffset* getPropertyIdentifierAndOffset() const { return propertySetHeader->propertyIdentifierAndOffset; }
+
+  const TypedPropertyValue* getPropertyById(uint32_t propertyId) const {
+    for (uint32_t i = 0; i < propertySetHeader->numProperties; i++)
+      if (propertySetHeader->propertyIdentifierAndOffset[i].id == propertyId)
+        return reinterpret_cast<const TypedPropertyValue*>(buffer + propertySetHeader->propertyIdentifierAndOffset[i].offset);
+
+    return NULL;
+  }
+
+  const TypedPropertyValue* getProperty(const PropertyIdentifierAndOffset* propertyIdentifierAndOffset) const {
+    return reinterpret_cast<const TypedPropertyValue*>(buffer + propertyIdentifierAndOffset->offset);
+  }
+
+ private:
+  const char* buffer;
+  const PropertySetHeader* propertySetHeader;
+  const char* fmtid;
+};
+
+class PropertySetStream {
+ public:
+  PropertySetStream(const void* buffer, size_t bufferLength)
+      : buffer(reinterpret_cast<const char*>(buffer)),
+        propertySetStreamHeader(reinterpret_cast<const PropertySetStreamHeader*>(buffer)),
+        bufferLength(bufferLength) {
+    auto numPropertySets = getNumPropertySets();
+
+    // A size of PropertySetStream is 28 bytes(from byteorder to numPropertySets) plus 20 bytes(FMTID and offset) * "# of PropertySets", and a size of
+    // PropertySet should be at least 8 bytes(size and numProperties).
+    if (bufferLength < 28 + 20 * numPropertySets + 8 * numPropertySets)
+      throw std::invalid_argument("invalid buffer length");
+  }
+
+  uint16_t getPropertySetVersion() const { return propertySetStreamHeader->version; }
+
+  // getNumPropertySets function MUST return either 1 or 2.
+  //
+  // When NumPropertySets is 1, this stream contains one property set
+  // and fields related to property set 2 (FMTID1, Offset1, PropertySet1) are absent.
+  uint32_t getNumPropertySets() const { return propertySetStreamHeader->numPropertySets; }
+
+  PropertySet getPropertySet(uint32_t index) const {
+    if (index >= getNumPropertySets())
+      throw std::invalid_argument("index > num property sets");
+
+    uint32_t offset = propertySetStreamHeader->propertySetInfo[index].offset;
+    return PropertySet(buffer + offset);
+  }
+
+ private:
+  const char* buffer;
+  size_t bufferLength;
+  const PropertySetStreamHeader* propertySetStreamHeader;
 };
 
 }  // namespace CFB
